@@ -110,15 +110,10 @@
 # Ref: https://www.daylight.com/meetings/summerschool01/course/basics/smarts.html
 
 
-import rdkit
+
 from rdkit import Chem
-from rdkit.Chem import rdmolops
-from rdkit.Chem import AllChem
-from rdkit.Chem import rdChemReactions
-from rdkit import DataStructs
 from rdkit.Chem.Scaffolds import MurckoScaffold
-from rdkit.Chem.rdChemReactions import CreateStructuralFingerprintForReaction, ReactionFingerprintParams, FingerprintType
-import math
+import numpy as np
 
 
 heteroatoms_nr = '#3,#4,#5,#7,#8,#9,#12,#13,#14,#15,#16,#17,#25,#26,#27,#28,#29,#30,#31,#32,#33,#34,#35,#45,#46,#47,#48,#50,#52,#53,#78,#80'
@@ -601,99 +596,79 @@ def smiles2scaffoldkey(smiles, trailing_inchikey=False):
     """
         Original rule-set of Scaffold Keys does not include inchikey, but I included it an optional argument, which can help deal with collisions (scaffolds of identical Scaffold Keys).
     """
-    sk = ''
-    sc_keys = []
     try:
         mol = Chem.MolFromSmiles(smiles)
-        bms = smiles2bmscaffold(smiles)
-        bms = Chem.MolFromSmiles(bms)
-        inchikey = smiles2inchikey(smiles)
-        sc_keys = generate_scaffold_key(mol)
+        if not mol:
+            return 'NA'  # Return early if invalid molecule
 
-        for i in range(len(sc_keys)):
-            sk += (str(sc_keys[i]) + ' ')
+        scaffold_keys = generate_scaffold_key(mol)
+        sk = " ".join(map(str, scaffold_keys))  # Faster string concatenation
 
         if trailing_inchikey:
-            sk += inchikey
+            sk += " " + smiles2inchikey(smiles)
 
-        sk = sk.strip()
+        return sk.strip()  # Ensures no extra spaces
 
-    except:
-        # print('[WARNING] SMILES: %s cannot be processed by RDKit.' % (smiles))
-        sk = 'NA'
-
-    return (sk)
+    except Exception as e:
+        return 'NA'  # Log or handle errors if needed
 
 
 def onestring(scaffold_key, has_inchikey=False):
     """
-        This function can be used to convert scaffold key into a fixed-length string so it can be used to sort scaffold keys simply alphanumerically.
+    Converts a scaffold key into a fixed-length string for alphanumeric sorting.
+
+    Args:
+        scaffold_key (str): The scaffold key to be converted.
+        has_inchikey (bool): If True, assumes the last value is an InChIKey and excludes it.
+
+    Returns:
+        str: Fixed-length string representation of the scaffold key.
+
+    Raises:
+        ValueError: If any value exceeds 9999.
     """
-    tmp = scaffold_key.split(' ')
-    tmp2 = []
-    res = ''
+    parts = scaffold_key.split()
+    numeric_parts = parts[:-1] if has_inchikey else parts
+
+    # Zero-pad each numeric part to 4 digits
+    try:
+        formatted_parts = [str(int(val)).zfill(4) for val in numeric_parts]
+    except ValueError:
+        raise ValueError("[ERROR]: Current implementation does not handle non-numeric values or values > 9999.")
+
+    # Concatenate all parts
+    result = "".join(formatted_parts)
 
     if has_inchikey:
-        tmp2 = tmp[:-1]
-    else:
-        tmp2 = tmp
+        result += parts[-1]  # Append the InChIKey without modification
 
-    for i in range(len(tmp2)):
-        dim_val = tmp2[i]
-        if (len(dim_val) == 1):
-            dim_val = '000' + dim_val
-        elif (len(dim_val) == 2):
-            dim_val = '00' + dim_val
-        elif (len(dim_val) == 3):
-            dim_val = '0' + dim_val
-        elif (len(dim_val) > 4):
-            print('[ERROR]: Current implementation does not handle values greater than 9999, please contact the developer. Terminating ...')
-
-        res += dim_val
-    res = res.strip()
-
-    if has_inchikey:
-        res += tmp[(len(tmp) - 1)]
-
-    return (res)
+    return result
 
 
 def sk_distance(sk1, sk2):
-
-
-
-    distance = 0.0
+    # Split the input strings by spaces
     tmp1 = sk1.split(' ')
     tmp2 = sk2.split(' ')
 
-    # If inchikey is trailing the scaffold key then remove it:
-    if len(tmp1) == 32:
-        i = 1
-    elif len(tmp1) == 33:
-        tmp1 = tmp1[:-1]
-    else:
-        print('[ERROR:] Length of scaffold key is neither 32 nor 33 (inchikey-appended). Problematic scaffold key: %s. Terminating' % (sk1))
+    # Remove inchikey if appended
+    if len(tmp1) == 33:
+        tmp1 = tmp1[:-1]  # Remove the inchikey
+    elif len(tmp1) != 32:
+        raise ValueError(f"[ERROR:] Invalid scaffold key length: {sk1}")
 
-    # If inchikey is trailing the scaffold key then remove it:
-    if len(tmp2) == 32:
-        i = 1
-    elif len(tmp2) == 33:
-        tmp2 = tmp2[:-1]
-    else:
-        print('[ERROR:] Length of scaffold key is neither 32 nor 33 (inchikey-appended). Problematic scaffold key: %s. Terminating' % (sk2))
+    if len(tmp2) == 33:
+        tmp2 = tmp2[:-1]  # Remove the inchikey
+    elif len(tmp2) != 32:
+        raise ValueError(f"[ERROR:] Invalid scaffold key length: {sk2}")
+    
+    # Convert to numpy arrays for efficient vectorized operations
+    tmp1 = np.array(tmp1, dtype=np.float64)
+    tmp2 = np.array(tmp2, dtype=np.float64)
 
-    sk_length = len(tmp1)
+    # Calculate the difference raised to the power of 1.5
+    diff = np.abs(tmp1 - tmp2) ** 1.5
 
-    for i in range(sk_length):
-        n_1 = int(tmp1[i])
-        n_2 = int(tmp2[i])
-        distance += (math.pow(math.fabs(n_1 - n_2), 1.5)) / (i + 1)
+    # Apply the weighting and sum up the distance using broadcasting
+    distance = np.sum(diff / (np.arange(1, tmp1.size + 1)))
 
-    return (distance)
-
-# smiles = 'c1ccccc1OCCCc2ccccc2'
-# smiles = 'C=C(CC1CCCCC1)C1=C2NCOC3C(=C)C(=O)SC(N=C1)=C23'
-# sk = smiles2scaffoldkey (smiles, trailing_inchikey = True)
-# print(sk)
-
-# print (onestring (sk, has_inchikey = True))
+    return distance

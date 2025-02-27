@@ -1,0 +1,13 @@
+name: cupy-env
+channels:
+  - conda-forge
+  - anaconda
+dependencies:
+  - python=3.11
+  - cupy
+  - rdkit
+  - pandarallel
+  - ipywidgets
+  - pip
+  - pip:
+    - .

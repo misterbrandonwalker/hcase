@@ -33,18 +33,13 @@
 By ChatGPT 4.0 Palantir Instance
 """
 
-try:
-    from rdkit import Chem
-except ImportError:
-    raise ImportError(
-        "RDKit is required for this functionality. Please install it via conda: 'conda install -c conda-forge rdkit'")
+
 
 import math
 import pandas as pd
-from typing import Callable, Any, Optional
+from typing import Optional
 import numpy as np
-from multiprocessing import Pool
-from tqdm import tqdm
+import time
 
 from rdkit import RDLogger
 
@@ -53,278 +48,25 @@ from hcase.scaffold_keys import smiles2bmscaffold, smiles2scaffoldkey, sk_distan
 
 from logging import getLogger
 
+from pandarallel import pandarallel
+import cupy as cp
+
+def initialize_pandarallel(n_cores: int = 1, progress_bar: bool = True):
+    """
+    Initializes pandarallel with a specified number of cores.
+
+    Args:
+        n_cores (int, optional): Number of CPU cores to use. Defaults to all available cores.
+        progress_bar (bool): Whether to show a progress bar. Defaults to True.
+    """
+    pandarallel.initialize(nb_workers=n_cores, progress_bar=progress_bar)
 
 lg = RDLogger.logger()
 lg.setLevel(RDLogger.CRITICAL)
 
 logger = getLogger()
 
-# def process_chunk(chunk: pd.DataFrame, func: Callable[[Any], Any], kwargs: dict, column: Optional[str] = None) -> pd.Series:
-#     """
-#     Processes a chunk of rows or columns by applying the given function.
-    
-#     Args:
-#         chunk: A chunk of the DataFrame to process.
-#         func: The function to apply to each row or column element.
-#         kwargs: Additional arguments to pass to the function.
-#         column: If provided, applies the function to a specific column of the chunk; otherwise applies to the whole row.
-    
-#     Returns:
-#         A Series with the results of applying the function to each row or column element.
-#     """
-#     if column:
-#         # Apply function to a specific column in the chunk
-#         return pd.Series([func(x, **kwargs) for x in chunk[column]]).reset_index(drop=True)
-#     else:
-#         # Apply function to entire rows
-#         return pd.Series([func(row, **kwargs) for _, row in chunk.iterrows()]).reset_index(drop=True)
-
-# def apply_function(
-#     df: pd.DataFrame, 
-#     func: Callable[[Any], Any], 
-#     n_cores: int = 1, 
-#     column: Optional[str] = None,  # Allow specifying a column to apply the function on
-#     **kwargs
-# ) -> pd.DataFrame:
-#     """
-#     Generalized function to apply `func` either to an entire row or a specific column of a DataFrame.
-    
-#     Args:
-#         df: DataFrame on which to apply the function.
-#         func: Function to apply on each row or element of the DataFrame.
-#         n_cores: Number of cores to use for parallel processing. If 1, runs sequentially.
-#         column: The specific column to apply the function on (optional).
-#         kwargs: Additional arguments to pass to `func`.
-    
-#     Returns:
-#         A DataFrame or Series with the applied function.
-#     """
-#     # If a specific column is provided, apply function to that column
-#     if column:
-#         if n_cores == 1:
-#             # Sequential processing: apply function to the specific column
-#             return df[column].map(lambda x: func(x, **kwargs)).reset_index(drop=True)
-#         else:
-#             data_split = np.array_split(df, n_cores)  # Split the full DataFrame
-#             pool = Pool(n_cores)
-
-#             # Process each chunk (with a specific column) and reset index
-#             result = pd.concat(
-#                 tqdm(pool.starmap(process_chunk, [(chunk, func, kwargs, column) for chunk in data_split]), total=n_cores)
-#             ).reset_index(drop=True)
-
-#             pool.close()
-#             pool.join()
-#             return result
-#     else:
-#         # If no column is specified, apply function to entire rows
-#         if n_cores == 1:
-#             return df.apply(lambda row: func(row, **kwargs), axis=1)
-#         else:
-#             data_split = np.array_split(df, n_cores)
-#             pool = Pool(n_cores)
-
-#             # Process each chunk (rows) and reset index
-#             result = pd.concat(
-#                 tqdm(pool.starmap(process_chunk, [(chunk, func, kwargs, None) for chunk in data_split]), total=n_cores)
-#             ).reset_index(drop=True)
-
-#             pool.close()
-#             pool.join()
-#             return result
-
-# def apply_sk(df: pd.DataFrame, n_cores: int = 1) -> pd.DataFrame:
-#     return apply_function(df, sk, n_cores, column='structure')
-
-# def apply_sk_one(df: pd.DataFrame, n_cores: int = 1) -> pd.DataFrame:
-#     return apply_function(df, sk_one, n_cores, column='sk')
-
-# # def apply_smiles2bmscaffold(df: pd.DataFrame, n_cores: int = 1) -> pd.DataFrame:
-# #     return apply_function(df, smiles2bmscaffold, n_cores, column='bms')
-
-# # def apply_smiles2scaffoldkey(df: pd.DataFrame, trailing_inchikey: bool = False, n_cores: int = 1) -> pd.DataFrame:
-# #     return apply_function(df, smiles2scaffoldkey, n_cores=n_cores, column='structure', trailing_inchikey=trailing_inchikey)
-
-# # def apply_closest_scaffold(df: pd.DataFrame, df_space: pd.DataFrame, nr_structures: int, n_cores: int = 1) -> pd.DataFrame:
-# #     return apply_function(df, closest_scaffold_func, n_cores=n_cores, df_space=df_space, nr_structures=nr_structures)
-
-# def apply_get_bucket_id(df: pd.DataFrame, bucket_size: int, n_cores: int = 1) -> pd.DataFrame:
-#     """
-#     Applies the get_bucket_id function to the 'closest_order' column of the DataFrame.
-
-#     Args:
-#         df: DataFrame containing the 'closest_order' column.
-#         bucket_size: The size of each bucket.
-#         n_cores: Number of cores to use for parallel processing. If 1, runs sequentially.
-
-#     Returns:
-#         A DataFrame with the bucket IDs assigned.
-#     """
-#     return apply_function(df, get_bucket_id_func, 'closest_order', n_cores, bucket_size=bucket_size)
-
-# def apply_get_hilbert_coordinates(df: pd.DataFrame, hilbert_curve: HilbertCurve, n_cores: int = 1) -> pd.DataFrame:
-#     """
-#     Applies the get_hilbert_coordinates function to the 'bucket_id' column of the DataFrame.
-
-#     Args:
-#         df: DataFrame containing the 'bucket_id' column.
-#         hilbert_curve: The HilbertCurve object to use for mapping.
-#         n_cores: Number of cores to use for parallel processing. If 1, runs sequentially.
-
-#     Returns:
-#         A DataFrame with the Hilbert space coordinates assigned.
-#     """
-#     return apply_function(df, get_hilbert_coordinates_func, 'bucket_id', n_cores, hilbert_curve=hilbert_curve)
-
-
-
-# def apply_closest_scaffold_on_split(data_split, df_space, nr_structures):
-#     return data_split.apply(lambda x: closest_scaffold(x['sk_struct'], df_space, x['idx'], nr_structures), axis=1)
-
-# def parallel_apply_closest_scaffold(df, df_space, nr_structures, func, n_cores=1):
-#     data_split = np.array_split(df[['sk_struct', 'idx']], n_cores)
-#     pool = Pool(n_cores)
-#     data = pd.concat(tqdm(pool.starmap(func, [(split, df_space, nr_structures) for split in data_split]), total=n_cores))
-#     pool.close()
-#     pool.join()
-#     return data
-
-# def apply_smiles2bmscaffold_on_split(data_split):
-#     return (data_split.apply(smiles2bmscaffold))
-
-
-# def parallel_apply_smiles2bmscaffold(df, func, n_cores=1):
-
-        
-#     data_split = np.array_split(df['structure'], n_cores)
-#     pool = Pool(n_cores)
-#     data = pd.concat(tqdm(pool.map(func, data_split), total=n_cores))
-#     pool.close()
-#     pool.join()
-#     return (data)
-
-# def apply_smiles2scaffoldkey_on_split(data_split, trailing_inchikey = False):
-#     return (data_split.apply(smiles2scaffoldkey, trailing_inchikey=trailing_inchikey))
-
-# def parallel_apply_smiles2scaffoldkey (df, func, trailing_inchikey = False, n_cores = 4):
-#     data_split = np.array_split(df['bms'], n_cores)
-#     pool = Pool(n_cores)
-#     data = pd.concat(tqdm(pool.starmap(func, [(split, trailing_inchikey) for split in data_split]), total=n_cores))
-#     pool.close()
-#     pool.join()
-#     return (data)
-
-def apply_sk_on_split(data_split):
-    return (data_split.apply(sk))
-
-
-
-def parallel_apply_sk(df, func, n_cores=1):
-
-        
-    data_split = np.array_split(df['structure'], n_cores)
-    pool = Pool(n_cores)
-    data = pd.concat(tqdm(pool.map(func, data_split), total=n_cores))
-    pool.close()
-    pool.join()
-    return (data)
-
-
-def apply_sk_one_on_split(data_split):
-    return (data_split.apply(sk_one))
-
-
-def parallel_apply_sk_one(df, func, n_cores=1):
-
-        
-    data_split = np.array_split(df['sk'], n_cores)
-    pool = Pool(n_cores)
-    data = pd.concat(tqdm(pool.map(func, data_split), total=n_cores))
-    pool.close()
-    pool.join()
-    return (data)
-
-
-def apply_smiles2bmscaffold_on_split(data_split):
-    return (data_split.apply(smiles2bmscaffold))
-
-
-def parallel_apply_smiles2bmscaffold(df, func, n_cores=1):
-
-        
-    data_split = np.array_split(df['structure'], n_cores)
-    pool = Pool(n_cores)
-    data = pd.concat(tqdm(pool.map(func, data_split), total=n_cores))
-    pool.close()
-    pool.join()
-    return (data)
-
-
-
-def apply_smiles2scaffoldkey_on_split(data_split, trailing_inchikey = False):
-    return (data_split.apply(smiles2scaffoldkey, trailing_inchikey=trailing_inchikey))
-
-def parallel_apply_smiles2scaffoldkey (df, func, trailing_inchikey = False, n_cores = 4):
-    data_split = np.array_split(df['bms'], n_cores)
-    pool = Pool(n_cores)
-    data = pd.concat(tqdm(pool.starmap(func, [(split, trailing_inchikey) for split in data_split]), total=n_cores))
-    pool.close()
-    pool.join()
-    return (data)
-
-
-
-def apply_closest_scaffold_on_split(data_split, df_space, nr_structures):
-    return data_split.apply(lambda x: closest_scaffold(x['sk_struct'], df_space, x['idx'], nr_structures), axis=1)
-
-def parallel_apply_closest_scaffold(df, df_space, nr_structures, func, n_cores=1):
-    data_split = np.array_split(df[['sk_struct', 'idx']], n_cores)
-    pool = Pool(n_cores)
-    data = pd.concat(tqdm(pool.starmap(func, [(split, df_space, nr_structures) for split in data_split]), total=n_cores))
-    pool.close()
-    pool.join()
-    return data
-
-def apply_get_bucket_id_on_split(data_split, bucket_size):
-    return data_split.apply(lambda x: get_bucket_id(x, bucket_size))
-
-def parallel_apply_get_bucket_id(df, bucket_size, func, n_cores=1):
-    data_split = np.array_split(df['closest_order'], n_cores)
-    pool = Pool(n_cores)
-    data = pd.concat(tqdm(pool.starmap(func, [(split, bucket_size) for split in data_split]), total=n_cores))
-    pool.close()
-    pool.join()
-    return data
-
-
-def apply_get_hilbert_coordinates_on_split(data_split, hilbert_curve):
-    return data_split.apply(lambda x: get_hilbert_coordinates(hilbert_curve, x))
-
-def parallel_apply_get_hilbert_coordinates(df, hilbert_curve, func, n_cores=1):
-    data_split = np.array_split(df['bucket_id'], n_cores)
-    pool = Pool(n_cores)
-    data = pd.concat(tqdm(pool.starmap(func, [(split, hilbert_curve) for split in data_split]), total=n_cores))
-    pool.close()
-    pool.join()
-    return data
-
-
-# def closest_scaffold_func(row: pd.Series, df_space: pd.DataFrame, nr_structures: int) -> int:
-#     """
-#     Finds the closest scaffold for a given structure based on the 'sk_struct' and 'idx' columns of the row.
-
-#     Args:
-#         row: A row of the DataFrame containing 'sk_struct' and 'idx'.
-#         df_space: DataFrame containing the reference scaffolds.
-#         nr_structures: Total number of structures.
-
-#     Returns:
-#         The closest scaffold as an integer (order).
-#     """
-#     return closest_scaffold(row['sk_struct'], df_space, row['idx'], nr_structures)
-
-
-def order_scaffolds(df: pd.DataFrame, n_cores: int = 1) -> pd.DataFrame:
+def order_scaffolds(df: pd.DataFrame) -> pd.DataFrame:
     """
     Orders scaffolds based on structure and scaffold key.
 
@@ -335,7 +77,6 @@ def order_scaffolds(df: pd.DataFrame, n_cores: int = 1) -> pd.DataFrame:
             - structure: SMILES structure
             - ptype: type of scaffold, example: scaffold
             - hash: InChIKey, example: NOWKCMXCCJGMRR-UHFFFAOYSA-N
-        n_cores: Number of cores to use for parallel processing. If 1, runs sequentially.
 
     Returns:
         A DataFrame ordered by scaffold keys with structure, order, scaffold_id, and scaffold_key.
@@ -343,27 +84,30 @@ def order_scaffolds(df: pd.DataFrame, n_cores: int = 1) -> pd.DataFrame:
     logger.info('[*] Ordering reference scaffolds ..')
 
     # Filter the dataframe to include only rows where ptype is 'scaffold'
-    df = df[df['ptype'] == 'scaffold']
+    df = df.query("ptype == 'scaffold'")
+
     nr_orig_scaffolds = df.shape[0]
 
-    # Apply sk function (structure key) in parallel or sequentially
-    df['sk'] = parallel_apply_sk(df, apply_sk_on_split, n_cores)
+
+    # Apply sk function (structure key) using pandarallel
+    df['sk'] = df['structure'].astype(str).parallel_apply(sk)
+
 
     # Filter out rows where the scaffold key is 'NA'
-    df = df[df['sk'] != 'NA']
+    df = df[df['sk'].ne('NA')]
 
-    # Apply sk_one function (structure key variant) in parallel or sequentially
-    df['sk_one'] = parallel_apply_sk_one(df, apply_sk_one_on_split, n_cores)
+
+
+    # Apply sk_one function (structure key variant) using pandarallel
+    df['sk_one'] = df['sk'].parallel_apply(sk_one)
+
 
     # Sort by 'sk_one'
     df = df.sort_values(['sk_one'])
 
     # Group by 'sk_one' and take the first occurrence of 'sk', 'pattern_id', and 'structure'
-    df = df.groupby(['sk_one'], as_index=False).agg({
-        'sk': 'first',
-        'pattern_id': 'first',
-        'structure': 'first'
-    })
+    df = df.groupby('sk_one', as_index=False).nth(0)
+
 
     # Drop the 'sk_one' column and rename columns for clarity
     df = df.drop(columns=['sk_one']).rename(columns={
@@ -469,27 +213,46 @@ def tr_expand_coords(df: pd.DataFrame, source_col: str, id_col: str, delimiter: 
     return df_result
 
 
-def closest_scaffold(sk_struct: Any, df_space: pd.DataFrame, idx: int, nr_structures: int) -> int:
+def closest_scaffold(sk_struct: str, df_space: pd.DataFrame, scaffold_keys_arr: np.ndarray, weights: np.ndarray, use_cupy: bool = False) -> int:
     """
-    Finds the closest reference scaffold for a given structure.
-
+    Finds the closest reference scaffold for a given structure using preprocessed scaffold keys.
+    
     Args:
-        sk_struct: The scaffold structure.
+        sk_struct: The scaffold structure (a string).
         df_space: DataFrame containing scaffold keys and related information.
-        idx: The index of the structure.
-        nr_structures: Total number of structures.
-
+        scaffold_keys_arr: Preprocessed scaffold keys.
+        weights: Precomputed weight array (1 / np.arange(1, max_features + 1))
+        row_based: Boolean to toggle between row-based (True) and matrix-based (False) computation
+        use_cupy: Boolean to toggle between using CuPy (True) for GPU or NumPy (False) for CPU
+        
     Returns:
         The order of the closest scaffold as an integer.
     """
-    df = df_space.copy()
-    df['sk_struct'] = sk_struct
+    # Fast conversion of space-separated string to NumPy array
+    sk_struct_arr = np.fromstring(sk_struct, sep=' ', dtype=np.float32)
+    scaffold_keys_arr = scaffold_keys_arr.astype(float)
 
-    df['sk_distance'] = df.apply(lambda x: sk_distance(x['sk_struct'], x['scaffold_key']), axis=1)
-    df = df.sort_values(['sk_distance', 'sk_struct'])
+    if use_cupy:
+        # Using CuPy for GPU-accelerated matrix-based computation
 
-    closest_scaffold_order = df['order'].values[0]
-    return int(closest_scaffold_order)
+        
+        # Transfer to GPU
+        sk_struct_arr_cp = cp.asarray(sk_struct_arr)
+        scaffold_keys_arr_cp = cp.asarray(scaffold_keys_arr, dtype=cp.float32)
+        weights_cp = cp.asarray(weights)
+
+        # Compute the diff and distance on the GPU
+        diff = cp.abs(scaffold_keys_arr_cp - sk_struct_arr_cp[:, cp.newaxis]) ** 1.5
+        distance = cp.einsum('ij,j->i', diff, weights_cp)  # Efficient weighted sum
+        closest_index = cp.argmin(distance).get()  # Transfer result back to CPU for indexing
+    else:
+        # Normal NumPy computation (CPU)
+        diff = np.abs(scaffold_keys_arr - sk_struct_arr) ** 1.5
+        distance = np.einsum('ij,j->i', diff, weights)  # Efficient weighted sum
+        closest_index = np.argmin(distance)
+
+    return int(df_space.iloc[closest_index]['order'])
+
 
 
 def get_bucket_id(closest_order: int, bucket_size: int) -> int:
@@ -524,7 +287,7 @@ def get_hilbert_coordinates(hc: HilbertCurve, bucket_id: int) -> str:
     return coordinate_str
 
 
-def train(df: pd.DataFrame, n_cores: int = 1) -> pd.DataFrame:
+def train(df: pd.DataFrame) -> pd.DataFrame:
     """
     Trains the model by ordering scaffolds and preparing the reference scaffold set.
 
@@ -535,7 +298,6 @@ def train(df: pd.DataFrame, n_cores: int = 1) -> pd.DataFrame:
             - structure: SMILES structure
             - ptype: type of scaffold, example: scaffold
             - hash: InChIKey, example: NOWKCMXCCJGMRR-UHFFFAOYSA-N
-        n_cores: Number of cores to use for parallel processing. If 1, runs sequentially.
 
     Returns:
         A DataFrame representing the ordered reference scaffolds set (df_space).
@@ -544,7 +306,7 @@ def train(df: pd.DataFrame, n_cores: int = 1) -> pd.DataFrame:
     df = define_reference_scaffolds(df)
 
     # Order the reference scaffolds by their Scaffold Keys (SKs)
-    df = order_scaffolds(df, n_cores)
+    df = order_scaffolds(df)
 
     df_space = df
     return df_space
@@ -571,7 +333,64 @@ def compute_max_phc_order(df_space: pd.DataFrame) -> int:
     return int(max_z)
 
 
-def embed(df_space: pd.DataFrame, df_structures: pd.DataFrame, n_dim: int, n_cores: int = 1) -> pd.DataFrame:
+def preprocess_scaffolds(df_space: pd.DataFrame):
+    """
+    Preprocesses scaffold keys to remove the inchikey part and split them into components.
+    This avoids the cost of splitting the string on every function call.
+    
+    Args:
+        df_space: DataFrame containing scaffold keys.
+        
+    Returns:
+        numpy array: Preprocessed scaffold keys for efficient distance computation.
+    """
+    # Split scaffold keys and remove inchikey (removes last element of split)
+    scaffold_keys_split = df_space['scaffold_key'].str.split(' ').apply(lambda x: x[:-1])  # Remove inchikey
+    scaffold_keys_arr = np.array(scaffold_keys_split.tolist(), dtype=object)
+    return scaffold_keys_arr
+
+def preprocess_scaffolds_vectorized(df_structures: pd.DataFrame) -> np.ndarray:
+    """Convert all sk_struct strings to NumPy arrays at once."""
+    return np.vstack(df_structures['sk_struct'].apply(lambda x: np.fromstring(x, sep=' ', dtype=np.float32)))
+
+
+def compute_distances_vectorized(sk_struct_arr: np.ndarray, scaffold_keys_arr: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """Vectorized distance computation."""
+    diff = np.abs(scaffold_keys_arr[:, None, :] - sk_struct_arr[None, :, :]) ** 1.5  # Shape (num_scaffolds, num_structures, num_features)
+    distances = np.einsum('ijk,k->ij', diff, weights)  # Shape (num_scaffolds, num_structures)
+    
+    return distances
+
+def batch_process_find_closest_scaffolds(sk_struct_arr, scaffold_keys_arr, weights, batch_size, use_cupy=False):
+    """Batch processing for finding closest scaffolds."""
+    num_structures = sk_struct_arr.shape[0]
+    all_distances = []  # We'll store all the distance computations here
+
+    # Iterate through the data in batches
+    for i in range(0, num_structures, batch_size):
+        sk_struct_batch = sk_struct_arr[i:i + batch_size]
+        
+        if use_cupy:  # GPU-based computation with CuPy
+            sk_struct_batch_cp = cp.asarray(sk_struct_batch, dtype=cp.float32)
+            distances_batch = compute_distances_vectorized(
+                sk_struct_batch_cp, cp.asarray(scaffold_keys_arr), cp.asarray(weights)
+            )
+            all_distances.append(distances_batch.get())  # Transfer result back to CPU
+        else:  # CPU-based computation with NumPy
+            distances_batch = compute_distances_vectorized(
+                sk_struct_batch, scaffold_keys_arr, weights
+            )
+            all_distances.append(distances_batch)
+
+    # Concatenate all batches' distances
+    all_distances = np.concatenate(all_distances, axis=1)  # Shape (num_scaffolds, num_structures)
+
+    # Find the closest scaffold for each structure after concatenation
+    closest_indices = np.argmin(all_distances, axis=0)  # Get closest scaffold indices for each structure
+
+    return closest_indices
+
+def embed(df_space: pd.DataFrame, df_structures: pd.DataFrame, n_dim: int, row_based=False, use_cupy = True, batch_size=500) -> pd.DataFrame:
     """
     Embeds structures based on reference scaffolds using Pseudo Hilbert Curves (PHCs).
 
@@ -581,84 +400,105 @@ def embed(df_space: pd.DataFrame, df_structures: pd.DataFrame, n_dim: int, n_cor
             - structure: SMILES representation of the structure.
             - id: unique identifier of the compound.
         n_dim: Number of dimensions for the Hilbert curve.
-        n_cores: Number of cores to use for parallel processing, 1 will be sequential (default: 1).
 
     Returns:
         A DataFrame containing the embedded Hilbert space coordinates for the structures.
     """
-    # Compute the maximum order of the Pseudo Hilbert Curves (PHCs)
+    start_time = time.time()
     max_z = compute_max_phc_order(df_space)
+    print(f"[TIMER] compute_max_phc_order took {time.time() - start_time:.4f} seconds.", flush=True)
+
     str_colname = 'structure'
     id_colname = 'id'
 
-    # Work with a copy of df_structures and limit it to the necessary columns
     df_structures = df_structures[[id_colname, str_colname]].copy()
-
     logger.info(df_structures.columns)
-    logger.info('[*] Generating Bemis-Murcko scaffolds for compounds ..')
 
-    # Generate Bemis-Murcko scaffolds for the compounds in parallel
-    df_structures['bms'] = parallel_apply_smiles2bmscaffold(df_structures, apply_smiles2bmscaffold_on_split, n_cores)
+    logger.info("Generating Bemis-Murcko scaffolds for compounds ..")
+    start_time = time.time()
+    df_structures['bms'] = df_structures['structure'].parallel_apply(smiles2bmscaffold)
+    print(f"[TIMER] smiles2bmscaffold took {time.time() - start_time:.4f} seconds.", flush=True)
 
-    # Filter out invalid scaffolds
     df_structures = df_structures[df_structures['bms'] != 'NA']
-    logger.info('[*] .. done')
+    logger.info(".. done")
 
-    # Rename structure column in df_space for clarity
     df_space = df_space.rename(columns={'structure': 'ref_scaffold_smiles'})
     nr_scaffolds = df_space.shape[0]
 
-    logger.info('[*] Generating Scaffold-Keys for the Bemis-Murcko scaffolds of compounds ..')
-
-    # Generate scaffold keys for the Bemis-Murcko scaffolds in parallel
-    df_structures['sk_struct'] = parallel_apply_smiles2scaffoldkey (df_structures,
-                                                                  apply_smiles2scaffoldkey_on_split,
-                                                                  trailing_inchikey = False,
-                                                                  n_cores = n_cores)
+    logger.info("Generating Scaffold-Keys for the Bemis-Murcko scaffolds of compounds ..")
+    start_time = time.time()
+    df_structures['sk_struct'] = df_structures['bms'].parallel_apply(lambda x: smiles2scaffoldkey(x, trailing_inchikey=False))
+    print(f"[TIMER] smiles2scaffoldkey took {time.time() - start_time:.4f} seconds.", flush=True)
 
     df_structures = df_structures[df_structures['sk_struct'] != 'NA']
     df_structures = df_structures.reset_index(drop=True)
     df_structures['idx'] = df_structures.index + 1
 
-    nr_structures = df_structures.shape[0]
-    logger.info('[*] Identifying the closest reference scaffolds of compounds ..')
+    logger.info("Identifying the closest reference scaffolds of compounds ..")
+    start_time = time.time()
 
-    # Identify the closest reference scaffolds in parallel
-    # df_structures['closest_order'] = apply_closest_scaffold(df_structures, df_space, nr_structures, n_cores=n_cores)
-    df_structures['closest_order'] = parallel_apply_closest_scaffold(df_structures, df_space, nr_structures, apply_closest_scaffold_on_split, n_cores)
- 
-    logger.info('[*] .. done')
+    # Preprocess scaffold keys only once
+    scaffold_keys_arr = preprocess_scaffolds(df_space)
+    scaffold_keys_arr = scaffold_keys_arr.astype(float)
 
-    # Prepare for embedding by iterating over the parameter z (PHC order)
+    # Precompute weights once
+    num_features = scaffold_keys_arr.shape[1]  # Assuming scaffold_keys_arr is (num_scaffolds, num_features)
+    weights = 1 / np.arange(1, num_features + 1)
+
+
+    if row_based:
+        # Row-based approach (using Pandarallel for parallel processing)
+        df_structures['closest_order'] = df_structures['sk_struct'].parallel_apply(
+            lambda sk_struct: closest_scaffold(sk_struct, df_space, scaffold_keys_arr, weights, use_cupy=use_cupy)
+        )
+    else:
+        # Vectorized approach (using CuPy or NumPy)
+        sk_struct_arr = preprocess_scaffolds_vectorized(df_structures)
+
+        # Use batching for large datasets
+        closest_indices = batch_process_find_closest_scaffolds(
+            sk_struct_arr, scaffold_keys_arr, weights, batch_size, use_cupy
+        )
+
+        # Assign back to DataFrame
+        df_structures['closest_order'] = df_space.iloc[closest_indices]['order'].values
+
+    
+    print(f"[TIMER] closest_scaffold took {time.time() - start_time:.4f} seconds.", flush=True)
+
+    logger.info(".. done")
+
     df_res = pd.DataFrame()
     first = True
 
     for hc_order in range(2, max_z + 1):
+        start_time = time.time()
         bucket_nr = math.pow(math.pow(2, hc_order), n_dim)
         bucket_size = int(round(nr_scaffolds / (bucket_nr - 1)))
-
         logger.info(f'Generating HCASE embedding at PHC order: {hc_order}, '
                     f'nr_scaffolds: {nr_scaffolds}, bucket_nr: {int(bucket_nr)}, bucket_size {bucket_size:.4f} ..')
 
-        # Initialize Hilbert curve
         hilbert_curve = HilbertCurve(hc_order, n_dim)
 
         df_hilbert = df_structures.copy()
 
-        logger.info(f'[*] Mapping compounds to pseudo-Hilbert-Curve of z={hc_order} ..')
+        logger.info(f'Mapping compounds to pseudo-Hilbert-Curve of z={hc_order} ..')
+        start_step_time = time.time()
+        df_hilbert['bucket_id'] = df_hilbert['closest_order'].parallel_apply(lambda x: get_bucket_id(x, bucket_size))
+        print(f"[TIMER] get_bucket_id took {time.time() - start_step_time:.4f} seconds.", flush=True)
 
-        # Assign bucket IDs based on closest scaffold order in parallel
-        df_hilbert['bucket_id'] = parallel_apply_get_bucket_id(df_hilbert, bucket_size, apply_get_bucket_id_on_split, n_cores=n_cores)
-        logger.info('[*] .. done')
+        logger.info(".. done")
 
-        logger.info('[*] Determining the 2D/3D coordinates of compounds in the HCASE map ..')
+        logger.info("Determining the 2D/3D coordinates of compounds in the HCASE map ..")
+        start_step_time = time.time()
+        df_hilbert['embedded_hs_coordinates'] = df_hilbert['bucket_id'].parallel_apply(lambda x: get_hilbert_coordinates(hilbert_curve, x))
+        print(f"[TIMER] get_hilbert_coordinates took {time.time() - start_step_time:.4f} seconds.", flush=True)
 
-        # Determine Hilbert space coordinates in parallel
-        df_hilbert['embedded_hs_coordinates'] = parallel_apply_get_hilbert_coordinates(df_hilbert, hilbert_curve, apply_get_hilbert_coordinates_on_split, n_cores=n_cores)
-        logger.info('[*] .. done')
+        logger.info(".. done")
 
-        # Expand Hilbert space coordinates into separate columns
+        start_step_time = time.time()
         df_hilbert = tr_expand_coords(df_hilbert, 'embedded_hs_coordinates', id_colname, delimiter=';')
+        print(f"[TIMER] tr_expand_coords took {time.time() - start_step_time:.4f} seconds.", flush=True)
 
         df_hilbert['hc_order'] = hc_order
 
@@ -668,6 +508,9 @@ def embed(df_space: pd.DataFrame, df_structures: pd.DataFrame, n_dim: int, n_cor
         else:
             df_res = pd.concat([df_res, df_hilbert], ignore_index=True)
 
-        logger.info('.. done.')
+        print(f"[TIMER] PHC order {hc_order} processing took {time.time() - start_time:.4f} seconds.", flush=True)
+        logger.info(".. done.")
 
     return df_res
+
+
